@@ -27,7 +27,7 @@ pipeline {
         stage('Run Tests') {
             steps {
                 echo 'Running unit tests...'
-                sh 'pytest test_app.py --junitxml=result.xml'
+                sh 'python3 -m pytest test_app.py --junitxml=result.xml'
             }
         }
 
