@@ -1,13 +1,34 @@
 # k8s/deployment.yaml
+#
+# Kubernetes manifest that defines how the Flask app (built into a
+# Docker image via the Dockerfile) actually runs in a cluster. This
+# file contains two Kubernetes objects, separated by "---":
+#   1. A Deployment, which manages a set of running app instances
+#      (pods) and handles rolling updates.
+#   2. A Service, which exposes those pods on a stable network
+#      address/port so they can be reached from outside the cluster.
+# It is applied by the Jenkins pipeline's "Deploy to Kubernetes" stage
+# (see Jenkinsfile), which runs `kubectl apply -f k8s/deployment.yaml`
+# and then updates the image tag for each new build.
+
+# --- Deployment: keeps the app's pods running and up to date ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  # Name Jenkins/kubectl use to refer to this Deployment (e.g. in
+  # `kubectl set image deployment/cicd-app-deployment ...`).
   name: cicd-app-deployment
   labels:
     app: cicd-app
 spec:
+  # Run two identical copies (pods) of the app for basic redundancy —
+  # if one pod crashes or its node goes down, the other keeps serving
+  # traffic while Kubernetes replaces the failed one.
   replicas: 2
   selector:
+    # Tells the Deployment which pods it "owns" by matching this label,
+    # so it must match the labels set under template.metadata.labels
+    # below.
     matchLabels:
       app: cicd-app
   template:
@@ -17,20 +38,45 @@ spec:
     spec:
       containers:
         - name: cicd-app
+          # Default image reference. In practice this gets overridden
+          # per-deployment by the Jenkins pipeline's
+          # `kubectl set image` step, which points to the specific
+          # build-numbered tag instead of "latest" for that release.
           image: ayoitshasya/cicd-app:latest
           ports:
+            # Must match the port the app actually listens on (see
+            # app.py's app.run(port=5000) and the Dockerfile's EXPOSE
+            # 5000).
             - containerPort: 5000
+          # Always re-pull the image even if a tag (like "latest")
+          # appears to already exist locally on the node — needed
+          # because "latest" is a mutable tag, so without this,
+          # Kubernetes might keep running a stale cached image.
           imagePullPolicy: Always
 ---
+# --- Service: stable network entry point for the app's pods ---
 apiVersion: v1
 kind: Service
 metadata:
   name: cicd-app-service
 spec:
+  # NodePort exposes the service on a static port on every cluster
+  # node's own IP address, making it reachable from outside the
+  # cluster without needing a cloud load balancer — suitable for local/
+  # demo clusters like this project's.
   type: NodePort
   selector:
+    # Routes traffic to any pod carrying this label — i.e. the pods
+    # created by the Deployment above.
     app: cicd-app
   ports:
+    # Port the Service itself is reachable on (from within the
+    # cluster).
     - port: 5000
+      # Port on the pod that traffic gets forwarded to (must match
+      # containerPort above).
       targetPort: 5000
+      # Fixed port (must be in Kubernetes' default NodePort range,
+      # 30000-32767) exposed on every node's external IP, used to reach
+      # the app from outside the cluster, e.g. http://<node-ip>:30080.
       nodePort: 30080
